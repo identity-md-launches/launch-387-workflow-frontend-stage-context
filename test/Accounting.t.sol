@@ -29,7 +29,7 @@ contract AccountingTest is TakeProfitFixture {
         vm.prank(BOB);
         takeProfit.cancelOrder(key, ORDER_TICK, false, BOB);
         assertEq(manager.balanceOf(address(hook), 0), 0, "last cancellation must redeem stored claims");
-        assertGt(BOB.balance, ALICE.balance, "remaining owner receives forfeited fees");
+        assertApproxEqAbs(BOB.balance, ALICE.balance, 2, "equal owners retain equal earned fees plus rounding dust");
         (,,, uint256 total0, uint256 total1, uint128 liquidity) = takeProfit.getOrderInfo(id);
         assertEq(total0, 0);
         assertEq(total1, 0);

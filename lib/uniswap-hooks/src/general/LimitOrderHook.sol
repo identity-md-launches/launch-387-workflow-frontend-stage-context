@@ -7,11 +7,12 @@ pragma solidity ^0.8.26;
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
-import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {TickBitmap} from "@uniswap/v4-core/src/libraries/TickBitmap.sol";
+import {BitMath} from "@uniswap/v4-core/src/libraries/BitMath.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
 import {SwapParams, ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
@@ -52,9 +53,8 @@ library OrderIdLibrary {
  * Orders can be cancelled at any time until they are filled and their liquidity is removed from the pool.
  * Once completely filled, the resulting liquidity can be withdrawn from the pool.
  *
- * IMPORTANT: When cancelling or adding more liquidity into an existing order, it's possible that fees
- * have been accrued. In those cases, the accrued fees are added to the order info, benefitting the remaining
- * limit order placers.
+ * Fees belong to the liquidity present when they accrued. Cancellation pays the owner's earned fees;
+ * fees belonging to remaining liquidity stay in the order as claims.
  *
  * WARNING: This is experimental software and is provided on an "as is" and "as available" basis. We do
  * not give any warranties and will not be liable for any losses incurred through any use of this code
@@ -114,6 +114,7 @@ abstract contract LimitOrderHook is BaseHook, IUnlockCallback {
         int256 liquidityDelta;
         address to;
         bool removingAllLiquidity;
+        uint128 liquidityTotalBefore;
         uint256 currency0Claims;
         uint256 currency1Claims;
     }
@@ -227,21 +228,42 @@ abstract contract LimitOrderHook is BaseHook, IUnlockCallback {
         override
         returns (bytes4, int128)
     {
-        (int24 tickLower, int24 lower, int24 upper) = _getCrossedTicks(key.toId(), key.tickSpacing);
-
-        if (lower > upper) return (this.afterSwap.selector, 0);
+        PoolId poolId = key.toId();
+        (int24 tickLower, int24 lower, int24 upper) = _getCrossedTicks(poolId, key.tickSpacing);
 
         // set the last tick lower for the pool
-        _tickLowerLasts[key.toId()] = tickLower;
+        _tickLowerLasts[poolId] = tickLower;
 
         // note that a zeroForOne swap means that the pool is actually gaining token0, so limit
         // order fills are the opposite of swap fills, hence the inversion below
-        bool zeroForOne = !params.zeroForOne;
-        for (; lower <= upper; lower += key.tickSpacing) {
-            _fillOrder(key, lower, zeroForOne);
-        }
+        _fillOrders(key, lower, upper, !params.zeroForOne);
 
         return (this.afterSwap.selector, 0);
+    }
+
+    /// @dev Fill initialized crossed ranges. Derived hooks may exclude unsupported order directions.
+    function _fillOrders(PoolKey calldata key, int24 lower, int24 upper, bool zeroForOne) internal virtual {
+        PoolId poolId = key.toId();
+        // An active order necessarily has an initialized lower tick. Skip empty intervals
+        // a word (256 spacing intervals) at a time, including gaps outside seeded liquidity.
+        int24 compressed = lower / key.tickSpacing;
+        int24 end = upper / key.tickSpacing;
+        while (compressed <= end) {
+            (int16 wordPos, uint8 bitPos) = TickBitmap.position(compressed);
+            uint256 initialized = poolManager.getTickBitmap(poolId, wordPos) & (type(uint256).max << bitPos);
+            int24 wordStart = int24(wordPos) * 256;
+            if (end - wordStart < 255) {
+                initialized &= type(uint256).max >> uint24(255 - (end - wordStart));
+            }
+            while (initialized != 0) {
+                uint8 bit = BitMath.leastSignificantBit(initialized);
+                _fillOrder(key, (wordStart + int24(uint24(bit))) * key.tickSpacing, zeroForOne);
+                // Removing orders can clear other bits cached in this word. Such stale bits
+                // are harmless: _fillOrder checks the current order id before acting.
+                initialized &= initialized - 1;
+            }
+            compressed = wordStart + 256;
+        }
     }
 
     /**
@@ -327,7 +349,7 @@ abstract contract LimitOrderHook is BaseHook, IUnlockCallback {
         if (liquidity == 0) revert ZeroLiquidity();
 
         _checkpointOwner(orderInfo, msg.sender);
-        CheckpointCurrencies memory forfeited = orderInfo.feeCredits[msg.sender];
+        CheckpointCurrencies memory earned = orderInfo.feeCredits[msg.sender];
         delete orderInfo.feeCredits[msg.sender];
         delete orderInfo.checkpoints[msg.sender];
         delete orderInfo.liquidity[msg.sender];
@@ -338,6 +360,7 @@ abstract contract LimitOrderHook is BaseHook, IUnlockCallback {
         data.liquidityDelta = -int256(uint256(liquidity));
         data.to = to;
         data.removingAllLiquidity = liquidity == orderInfo.liquidityTotal;
+        data.liquidityTotalBefore = orderInfo.liquidityTotal;
         orderInfo.liquidityTotal -= liquidity;
         if (data.removingAllLiquidity) {
             _setOrderId(key, tickLower, zeroForOne, ORDER_ID_DEFAULT);
@@ -345,23 +368,24 @@ abstract contract LimitOrderHook is BaseHook, IUnlockCallback {
             data.currency1Claims = orderInfo.currency1Total;
             orderInfo.currency0Total = 0;
             orderInfo.currency1Total = 0;
+        } else {
+            data.currency0Claims = earned.amountCurrency0;
+            data.currency1Claims = earned.amountCurrency1;
+            orderInfo.currency0Total -= data.currency0Claims;
+            orderInfo.currency1Total -= data.currency1Claims;
         }
 
         // unlock the callback to the poolManager, the callback will trigger `unlockCallback`
         // and remove the liquidity from the pool. Note that this function will return the fees accrued
         // by the position, since the limit order is a liquidity addition.
-        // Note that `amount0Fee` and `amount1Fee` are the fees accrued by the position and will not be transferred to
-        // the `to` address. Instead, they will be added to the order info (benefiting the remaining limit order placers).
+        // The callback pays the canceller's share of freshly collected fees directly and
+        // returns only fees belonging to the remaining liquidity.
         (uint256 amount0Fee, uint256 amount1Fee) = abi.decode(
             poolManager.unlock(abi.encode(CallbackData(CallbackType.Cancel, abi.encode(data)))), (uint256, uint256)
         );
 
         if (!data.removingAllLiquidity) {
-            orderInfo.currency0Total += amount0Fee;
-            orderInfo.currency1Total += amount1Fee;
-            // Retain the base policy: cancelling owners forfeit fees to the remaining owners.
-            // The forfeited credit was already included in currency totals, so do not add it twice.
-            _distributeFees(orderInfo, amount0Fee + forfeited.amountCurrency0, amount1Fee + forfeited.amountCurrency1);
+            _accrueFees(orderInfo, amount0Fee, amount1Fee);
         }
 
         // emit the cancel event
@@ -509,8 +533,8 @@ abstract contract LimitOrderHook is BaseHook, IUnlockCallback {
 
     /**
      * @dev Internal handler for cancel order callbacks. Takes `cancelData` containing the cancellation details and
-     * removes liquidity from the pool. Returns accrued fees `(amount0Fee, amount1Fee)` which are allocated to remaining
-     * limit order placers, or to the cancelling user if they're removing all liquidity.
+     * removes liquidity from the pool. Pays principal and earned fees to the canceller, returning only
+     * the newly collected fees belonging to remaining liquidity as `(amount0Fee, amount1Fee)`.
      */
     function _handleCancelCallback(CancelCallbackData memory cancelData)
         internal
@@ -531,57 +555,48 @@ abstract contract LimitOrderHook is BaseHook, IUnlockCallback {
             ZERO_BYTES
         );
 
-        BalanceDelta principalDelta;
+        BalanceDelta payoutDelta = cancelDelta;
 
-        // because `modifyPosition` includes not just principal value but also fees, we cannot allocate
-        // the proceeds pro-rata. if we were to do so, users who have been in a limit order that's partially filled
-        // could be unfairly diluted by a user synchronously placing then canceling a limit order to skim off fees.
-        // to prevent this, we allocate all fee revenue to remaining limit order placers, unless this is the last order.
+        // Historical fees are checkpointed separately. Fresh fees accrued since the last
+        // modification belong pro rata to liquidity present immediately before removal.
         if (!cancelData.removingAllLiquidity) {
+            uint256 removed = uint256(-cancelData.liquidityDelta);
             // if the amount of fees in currency0 is positive, mint currency0 to the hook
             if (feesAccrued.amount0() > 0) {
-                poolManager.mint(
-                    address(this), cancelData.key.currency0.toId(), amount0Fee = uint128(feesAccrued.amount0())
-                );
+                uint256 fees = uint128(feesAccrued.amount0());
+                amount0Fee = fees - FullMath.mulDiv(fees, removed, cancelData.liquidityTotalBefore);
+                poolManager.mint(address(this), cancelData.key.currency0.toId(), amount0Fee);
             }
 
             // if the amount of fees in currency1 is positive, mint currency1 to the hook
             if (feesAccrued.amount1() > 0) {
-                poolManager.mint(
-                    address(this), cancelData.key.currency1.toId(), amount1Fee = uint128(feesAccrued.amount1())
-                );
+                uint256 fees = uint128(feesAccrued.amount1());
+                amount1Fee = fees - FullMath.mulDiv(fees, removed, cancelData.liquidityTotalBefore);
+                poolManager.mint(address(this), cancelData.key.currency1.toId(), amount1Fee);
             }
 
-            // if the `removingAllLiquidity` flag is false, the fees accrued will be allocated to the remaining limit order placers
-            // so we need to subtract the fees from the `cancelDelta` to get the principal delta
-            principalDelta = cancelDelta - feesAccrued;
-        } else {
-            // if the `removingAllLiquidity` flag is true, the fees accrued will be allocated to the placer of the last limit order being cancelled
-            // so we can just use the `cancelDelta` as the principal delta
-            principalDelta = cancelDelta;
+            payoutDelta = cancelDelta - toBalanceDelta(int128(uint128(amount0Fee)), int128(uint128(amount1Fee)));
         }
 
-        // Redeem fees collected by earlier modifications when the final owner cancels.
-        if (cancelData.removingAllLiquidity) {
-            _handleWithdrawCallback(
-                WithdrawCallbackData(
-                    cancelData.key.currency0,
-                    cancelData.key.currency1,
-                    cancelData.currency0Claims,
-                    cancelData.currency1Claims,
-                    cancelData.to
-                )
-            );
-        }
+        // Redeem the owner's historical fees, including residual dust for the final owner.
+        _handleWithdrawCallback(
+            WithdrawCallbackData(
+                cancelData.key.currency0,
+                cancelData.key.currency1,
+                cancelData.currency0Claims,
+                cancelData.currency1Claims,
+                cancelData.to
+            )
+        );
 
         // if the amount of currency0 is positive, take the currency0 from the pool and send it to the `to` address
-        if (principalDelta.amount0() > 0) {
-            cancelData.key.currency0.take(poolManager, cancelData.to, uint256(uint128(principalDelta.amount0())), false);
+        if (payoutDelta.amount0() > 0) {
+            cancelData.key.currency0.take(poolManager, cancelData.to, uint256(uint128(payoutDelta.amount0())), false);
         }
 
         // if the amount of currency1 is positive, take the currency1 from the pool and send it to the `to` address
-        if (principalDelta.amount1() > 0) {
-            cancelData.key.currency1.take(poolManager, cancelData.to, uint256(uint128(principalDelta.amount1())), false);
+        if (payoutDelta.amount1() > 0) {
+            cancelData.key.currency1.take(poolManager, cancelData.to, uint256(uint128(payoutDelta.amount1())), false);
         }
     }
 
@@ -763,12 +778,11 @@ abstract contract LimitOrderHook is BaseHook, IUnlockCallback {
     }
 
     /**
-     * @dev Get the current tick for a given pool. Takes a `PoolId` `poolId` and returns the tick calculated
-     * from the pool's current sqrt price.
+     * @dev Use the manager's tick, including its tick - 1 convention after a downward
+     * boundary crossing. Recomputing from sqrt price would miss exactly completed orders.
      */
     function _getTick(PoolId poolId) internal view returns (int24 tick) {
-        (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(poolId);
-        tick = TickMath.getTickAtSqrtPrice(sqrtPriceX96);
+        (, tick,,) = poolManager.getSlot0(poolId);
     }
 
     /**

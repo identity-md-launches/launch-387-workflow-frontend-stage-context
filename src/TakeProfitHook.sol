@@ -54,7 +54,12 @@ contract TakeProfitHook is LimitOrderHook {
         if (liquidity == 0) revert ZeroLiquidity();
     }
 
-    /// @dev Protect against the base's cached tick lag after a same-range swap/reversal. Never
+    /// @dev This hook cannot hold ETH-selling orders, so sells need only update the base cursor.
+    function _fillOrders(PoolKey calldata key, int24 lower, int24 upper, bool zeroForOne) internal override {
+        if (!zeroForOne) super._fillOrders(key, lower, upper, false);
+    }
+
+    /// @dev Protect against an incomplete crossing after a same-range swap/reversal. Never
     ///      remove an order while its principal still contains the token being sold.
     function _fillOrder(PoolKey calldata key, int24 tickLower, bool zeroForOne) internal override {
         (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(key.toId());
