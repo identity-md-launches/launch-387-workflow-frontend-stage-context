@@ -1,0 +1,42 @@
+[
+  {
+    "url": "https://raw.githubusercontent.com/OpenZeppelin/uniswap-hooks/master/LICENSE",
+    "file": "docs/licenses/OpenZeppelin-uniswap-hooks-LICENSE.txt",
+    "sha256": "30c4ef57d60073e258c0f027d6b6dc25a50f101981af3deab109ee6cb15c2024"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/OpenZeppelin/openzeppelin-contracts/master/LICENSE",
+    "file": "docs/licenses/OpenZeppelin-openzeppelin-contracts-LICENSE.txt",
+    "sha256": "20aebc68b11c063133aa2af0ef4bb29875477c6d16d715718f0daec563938b84"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/Uniswap/v4-periphery/main/LICENSE",
+    "file": "docs/licenses/Uniswap-v4-periphery-LICENSE.txt",
+    "sha256": "66eb4bd7506d0a33cc953ed77c1fee2fe6a34d8c0ac40d4e852e6bfbf754f80e"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/foundry-rs/forge-std/master/LICENSE-MIT",
+    "file": "docs/licenses/foundry-rs-forge-std-LICENSE-MIT.txt",
+    "sha256": "6d185dfe089d4de346d391fc5997fbd4739bad1d6556010413c10f420d704ecc"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/foundry-rs/forge-std/master/LICENSE-APACHE",
+    "file": "docs/licenses/foundry-rs-forge-std-LICENSE-APACHE.txt",
+    "sha256": "50b6bf8bdb63265ce14953b480b7aaa0271e78f56843b99c184abd3ae5048cd7"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/transmissions11/solmate/main/LICENSE",
+    "file": "docs/licenses/transmissions11-solmate-LICENSE.txt",
+    "sha256": "2342e3df1d1c72d9ee74f5ad3161a769f623e206c4d7ef7192f86ad119b8fe4b"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/Uniswap/v4-core/main/licenses/BUSL_LICENSE",
+    "file": "docs/licenses/Uniswap-v4-core-BUSL_LICENSE",
+    "sha256": "cd5241d8e1afe7098fa0f21059f7153348fdd25dbae5a8383a5f1dd2eb590321"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/Uniswap/v4-core/main/licenses/MIT_LICENSE",
+    "file": "docs/licenses/Uniswap-v4-core-MIT_LICENSE",
+    "sha256": "b7b0c4379346af0701f5e4df9c861295d4a3af91dc3b15eb4356ebc571303df9"
+  }
+]
