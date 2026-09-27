@@ -1,0 +1,53 @@
+{
+  "chainId": 11155111,
+  "repoUrl": "https://github.com/identity-md-launches/launch-247-takeprofithook",
+  "version": 1,
+  "launchId": "06be26db-a8ac-44fd-89a0-3be8532d8ee0",
+  "manifest": {
+    "hook": {
+      "contract": "TakeProfitHook",
+      "permissions": [
+        "afterInitialize",
+        "afterSwap"
+      ],
+      "constructorArgs": [
+        "0xE03A1074c86CFeDd5C142C4F04F1a1536e203543"
+      ]
+    },
+    "kind": "univ4_hook",
+    "pool": {
+      "fee": 3000,
+      "tickSpacing": 60,
+      "initialPrice": "78588986356927097284479352776873",
+      "pairedCurrency": "0x0000000000000000000000000000000000000000"
+    },
+    "notes": "TakeProfitHook extends the locally modified OpenZeppelin LimitOrderHook. Its sole constructor argument is the approved Sepolia PoolManager; LaunchToken has no constructor arguments. Only afterInitialize and afterSwap are enabled, giving address bits 0x1040 under mask 0x3FFF, validated by the hook constructor; the factory mines the CREATE2 salt. The intended pool has native ETH as currency0 and TKPF as currency1, with a 0.30% LP fee and spacing 60. initialPrice is decimal sqrtPriceX96 from TickMath.getSqrtPriceAtTick(138000), matching test/BaseHookTest.sol's starting price and token-only seed fixture. Orders sell TKPF for ETH over [tick, tick + 60], with the lower tick a multiple of 60 strictly below the current range. ETH-selling orders are rejected. Partial crossings remain active; fully crossed orders hold proceeds as PoolManager ERC-6909 claims for pull withdrawal. State is isolated by PoolId; the hook is not bound to a single token. Callbacks are PoolManager-only, with no administrative, pause or upgrade path. On buys, afterSwap scans bitmap words and processes initialized crossed ticks; on sells it only updates the cursor. Dense fills remain gas-dependent; gas measurements and accounting changes are documented in docs/GAS.md and docs/REVIEW.md. ABI exports are docs/abi/TakeProfitHook.json and docs/abi/LaunchToken.json. This manifest is a technical description; launch policy and signed artifact linkage are supplied separately by services. Independent review, publication, attestation, admission, deployment and the frontend are separate stage outcomes.",
+    "token": {
+      "name": "Takeprofit",
+      "symbol": "TKPF",
+      "contract": "LaunchToken",
+      "decimals": 18
+    }
+  },
+  "contracts": [
+    {
+      "name": "LaunchToken",
+      "txHash": "0x97483072cf49564a6359e3ea40c49a63cef0bc9b8e2a32ddb293979177bbe426",
+      "abiHash": "f36d2fe28b62f817a4fba0b78bb501b41895eada3982280273c063ad8183f577",
+      "address": "0x67218a97ccfffe56cb07c786a29fab4c86ebc45e",
+      "blockNumber": 11791633,
+      "creationCodeHash": "7d03a9d973820cb86cb440ccb952c9d5814fac1f70b8b47569b990b325dc8790"
+    },
+    {
+      "name": "TakeProfitHook",
+      "txHash": "0x97483072cf49564a6359e3ea40c49a63cef0bc9b8e2a32ddb293979177bbe426",
+      "abiHash": "e022a6cb5b7a3ed5a670f53362b9258749a85b6f36c337667053ec1ac8b2df89",
+      "address": "0x44e3740c44412a4f1d87b5d4392a4963d0599040",
+      "blockNumber": 11791633,
+      "creationCodeHash": "26f982f34ffea56642c8e57b99193a1d704d34b88ccec61b421b128e91a5795f"
+    }
+  ],
+  "sourceCommit": "6c0d7149c62681b3b8616e4d0dc13d7d255f33a7",
+  "abiInstructions": "Build ABIs from this exact source commit; compare canonicalKeccak(abi) with abiHash. Verify deployed code on the stated chain before enabling transactions.",
+  "attestationHash": "5761ce2fe037ea8b651447ccb478c1d636ecdeec68210491b10c168e93d3605c"
+}
